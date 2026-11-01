@@ -1,0 +1,10 @@
+# One-click deploy on Render (render.com): New + > Blueprint > pick this repo.
+services:
+  - type: web
+    name: remotesupport-relay
+    runtime: node
+    rootDir: remotesupport-relay
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    plan: free
