@@ -1,0 +1,17 @@
+{
+  "name": "remotesupport-relay",
+  "version": "0.2.0",
+  "description": "Internet relay for the RemoteSupport Android app: phones connect out, browsers watch and control from anywhere.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
