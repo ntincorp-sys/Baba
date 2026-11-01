@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RemoteSupport</title>
+<style>
+  :root{--bg:#0f1115;--panel:#181b22;--text:#e9ecf1;--muted:#9aa3b2;--accent:#1e5eff;--bad:#e5484d;--ok:#30a46c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center}
+  header{width:100%;padding:10px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;background:var(--panel)}
+  h1{font-size:18px;margin:0 12px 0 0}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:15px;cursor:pointer}
+  button.secondary{background:#2a2f3a}
+  #status{font-size:13px;color:var(--muted);flex-basis:100%;text-align:center}
+  #connect{margin-top:12vh;background:var(--panel);padding:24px;border-radius:12px;width:min(360px,92vw);display:flex;flex-direction:column;gap:12px}
+  #connect label{font-size:13px;color:var(--muted)}
+  #connect input{font-size:22px;letter-spacing:2px;padding:10px;border-radius:8px;border:1px solid #333a46;background:#0f1115;color:var(--text);font-family:ui-monospace,monospace}
+  #error{color:var(--bad);font-size:14px;min-height:1em}
+  #stage{display:none;margin:12px 0;flex-direction:column;align-items:center}
+  canvas{max-height:84vh;max-width:96vw;border:2px solid #2a2f3a;border-radius:10px;touch-action:none;cursor:pointer;background:#000}
+  .controls{display:none;gap:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>RemoteSupport</h1>
+  <div class="controls" id="controls">
+    <button onclick="key('back')">Back</button>
+    <button onclick="key('home')">Home</button>
+    <button onclick="key('recents')">Recents</button>
+    <button class="secondary" onclick="disconnect()">Disconnect</button>
+  </div>
+  <div id="status"></div>
+</header>
+
+<form id="connect" onsubmit="event.preventDefault(); connect();">
+  <label for="id">Device ID (9 digits, shown on the phone)</label>
+  <input id="id" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789">
+  <label for="pin">Session PIN (6 digits)</label>
+  <input id="pin" inputmode="numeric" autocomplete="off" maxlength="7" placeholder="123 456">
+  <button type="submit">Connect</button>
+  <div id="error"></div>
+</form>
+
+<div id="stage"><canvas id="screen"></canvas></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  if (params.get("id")) $("id").value = params.get("id");
+  const canvas = $("screen"), ctx = canvas.getContext("2d");
+  let ws = null, controlOn = false;
+
+  function setStatus(t) { $("status").textContent = t; }
+
+  function connect() {
+    const id = $("id").value.replace(/\D/g, ""), pin = $("pin").value.replace(/\D/g, "");
+    if (id.length !== 9 || pin.length !== 6) { $("error").textContent = "Enter the 9-digit Device ID and 6-digit PIN."; return; }
+    $("error").textContent = "";
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(`${proto}//${location.host}/view?id=${id}&pin=${pin}`);
+    ws.binaryType = "blob";
+    setStatus("Connecting…");
+
+    ws.onopen = () => {
+      $("connect").style.display = "none";
+      $("stage").style.display = "flex";
+      $("controls").style.display = "flex";
+      setStatus("Connected — waiting for the first frame…");
+    };
+    ws.onmessage = async (ev) => {
+      if (typeof ev.data === "string") {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "status") {
+          controlOn = !!msg.control;
+          setStatus(controlOn ? "Connected — click to tap, drag to swipe" : "Connected (view only — remote control is off on the phone)");
+        }
+        return;
+      }
+      const bmp = await createImageBitmap(ev.data);
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) { canvas.width = bmp.width; canvas.height = bmp.height; }
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+    };
+    ws.onclose = (ev) => {
+      $("connect").style.display = "flex";
+      $("stage").style.display = "none";
+      $("controls").style.display = "none";
+      $("error").textContent = ev.reason || "Disconnected.";
+      setStatus("");
+      ws = null;
+    };
+  }
+  function disconnect() { if (ws) ws.close(); }
+
+  function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "input", ...obj })); }
+  function key(k) { send({ action: k }); }
+  function norm(e) {
+    const r = canvas.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+  }
+  let start = null, t0 = 0;
+  canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); start = norm(e); t0 = Date.now(); canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener("pointerup", (e) => {
+    if (!start) return;
+    const end = norm(e), dt = Date.now() - t0;
+    if (Math.hypot(end[0] - start[0], end[1] - start[1]) > 0.02)
+      send({ action: "swipe", x: start[0], y: start[1], x2: end[0], y2: end[1], ms: Math.max(100, Math.min(dt, 1500)) });
+    else send({ action: dt > 600 ? "longpress" : "tap", x: start[0], y: start[1] });
+    start = null;
+  });
+</script>
+</body>
+</html>
